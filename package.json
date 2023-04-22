@@ -1,0 +1,31 @@
+{
+    "name": "postgres-ipc",
+    "version": "1.0.1",
+    "description": "PGClient wrapper for triggering & listening to notification",
+    "types": "./dist/IPC.d.ts",
+    "main": "./dist/IPC.js",
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE"
+    ],
+    "keywords": [
+        "pg",
+        "postgres",
+        "notifications",
+        "ipc"
+    ],
+    "license": "MIT",
+    "author": "WhatCats",
+    "repository": "https://github.com/WhatCats/postgres-ipc",
+    "bugs": "https://github.com/WhatCats/postgres-ipc/issues",
+    "homepage": "https://github.com/WhatCats/postgres-ipc",
+    "dependencies": {
+        "pg": "^8.10.0"
+    },
+    "devDependencies": {
+        "@types/node": "^18.15.13",
+        "@types/pg": "^8.6.6",
+        "typescript": "^5.0.4"
+    }
+}

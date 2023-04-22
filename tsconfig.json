@@ -1,0 +1,17 @@
+{
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "CommonJS",
+        "moduleResolution": "node",
+        "esModuleInterop": true,
+        "emitDecoratorMetadata": true,
+        "experimentalDecorators": true,
+        "preserveConstEnums": true,
+        "resolveJsonModule": true,
+        "declaration": true,
+        "strict": true,
+        "rootDir": "src",
+        "outDir": "dist"
+    },
+    "include": ["src"]
+}
