@@ -1,6 +1,6 @@
 {
     "name": "postgres-ipc",
-    "version": "1.0.1",
+    "version": "1.1.0",
     "description": "PGClient wrapper for triggering & listening to notification",
     "types": "./dist/IPC.d.ts",
     "main": "./dist/IPC.js",
