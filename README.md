@@ -1,24 +1,20 @@
 # postgres-ipc
-``` npm install postgres-ipc ```
-
-PGClient wrapper for triggering and listening to notification.
-
+PG-Client wrapper for making NOTIFY/LISTEN/UNLISTEN queries. Exposed as async functions or as an EventEmitter (continuation of `pg-ipc`).
 > See more about Postgres notifications here: https://www.postgresql.org/docs/15/libpq-notify.html
 
-## Disconnects
-Network issues could occur or the database process may get restarted while your application is running.
-In the case of a disconnect this will <ins><b>automatically try reconnecting until it is successful or destroyed</b></ins> with a 5 second cooldown.
-While the client is disconnected any `.query()` call including `.notify()` will throw an error.
-Once reconnected it will automatically start listening to all of the channels you added listeners for again.
-To see the reconnect process in action, add a listener to the debug event like shown in the example below.
+## Features
+- easy switch from abandoned [pg-ipc](https://github.com/emilbayes/pg-ipc) project
+- seamless EventEmitter interface with typings
+- async methods for more controlled access
+- auto reconnect without console spam (you wont even notice a disconnect occurred - well as long you don't try and query the client while it's disconnected)
 
-## Basic Example
+## Example 1: It's just an EventEmitter?
 ```js
+import PostgresIPCClient from 'postgres-ipc'
+// const PostgresIPCClient = require('postgres-ipc')
+
 // Same constructor as Client form pg but defaults to process.env.POSTGRES_CONN_URI
 const ipc = new PostgresIPCClient(process.env.POSTGRES_CONN_URI)
-ipc.on("debug", console.log) // optional debug content if needed
-ipc.on("error", console.error) // This is recommended. All uncaught errors from your (async) listeners will end up here.
-ipc.on("end", () => console.log("This is called when destroy is called if the client was previously connected."))
 
 // You can add listeners before connecting.
 ipc.on("channel-name", (notification) => {
@@ -27,47 +23,57 @@ ipc.on("channel-name", (notification) => {
 })
 // Once connected it will auto query 'LISTEN channel-name' since you added this listener here.
 
-ipc.connect().then(async () => {
-    // this returns a promise but it does not throw errors so you can choose not to await this safely.
-    // returns Promise<undefined> if successful and Promise<Error> if error
-    // (The error is already sent to console.error so no need to worry about logging the error.)
-    ipc.notify("channel-name", { message: "hello" })
+// Haven't connected yet? No problem... This NOTIFY query will automatically be sent once you connect.
+ipc.emit("channel-name", { message: "hello" })
 
+// Basically the same thing but this is awaitable, will return the error (not throw it) 
+// and already logs the error to console.error for you.
+ipc.notify("channel-name", { message: "hello" })
+
+// This is a deprecated alias for notify bcs pg-ipc had this.
+ipc.send("channel-name", { message: "hello" })
+
+// Remember to connect ;)
+ipc.connect().then(async () => {
     // once destroyed you can't connect again
     await ipc.destroy()
     // also feel free to call this as many times as you feel fit
     await ipc.destroy()
 })
 
-// Calling notify before connecting will wait for the PG-Client to connect and make the notify query before resolving the result promise.
-// If the client was destroyed or got disconnected this will throw an error.
-ipc.notify("channel-name", { message: "hello" }) 
-ipc.connect() // You can call connect as many times as you want without errors.
+// You can call connect as many times as your heart desires.
+ipc.connect() 
 ```
 
-## Using async methods to listen & unlisten
+## Example 2: Let me await that
 ```js
-const ipc = new PostgresIPCClient()
-ipc.on("error", console.error)
-ipc.on("notify", (event, payload) => console.log("notify called", event, payload))
-ipc.on("notification", (notification) => {
-    if (notification.channel === "channel") console.log(notification.payload)
-})
+import PostgresIPCClient from 'postgres-ipc'
+// const PostgresIPCClient = require('postgres-ipc')
 
+const ipc = new PostgresIPCClient()
 ipc.connect().then(async () => {
     await ipc.listen("channel")
     await ipc.listen(["channel1", "channel2"])
     
-    await ipc.unlisten("channel2")
+    await ipc.unlisten("channel")
+    await ipc.unlisten(["channel1", "channel2"])
+    await ipc.unlisten() // (Unlisten to all)
     console.log(ipc.channels()) // These are the channels you are currently listening for.
 
-    // This will log 'notify called channel Hello!' bcs of the .on("notify") listener above.
-    // This will also log 'Hello!' bcs of the .on("notification") listener above.
-    await ipc.notify("channel", "Hello!")
-
+    await ipc.notify("IMPORTANT", "Remember this won't throw an error, it will return an error that has already been logged.")
     await ipc.destroy()
 })
 ```
 
-## Credits
-Credit to https://github.com/emilbayes/pg-ipc but seems to have been abandoned :/ so I created a newer, typescript version.
+## Take a look at these events
+```js
+ipc.on('notification', (notification) => console.log("Notification from any channel!", notification))
+ipc.on('notify', (channel, payload) => console.log("A PG NOTIFY query was successfully made!", channel, payload))
+ipc.on('debug', (message) => console.log("See exactly what's happening:", message))
+// console.error is already added as a default error handler. Your own listener will overwrite it though.
+ipc.on('error', (err) => console.log("One of your listeners threw an error:", err))
+ipc.on('end', () => console.log("I was once connected but I got destroyed :("))
+```
+
+## Install
+``` npm install postgres-ipc ```

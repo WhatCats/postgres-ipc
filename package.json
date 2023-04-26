@@ -1,7 +1,7 @@
 {
     "name": "postgres-ipc",
-    "version": "1.1.0",
-    "description": "PGClient wrapper for triggering & listening to notification",
+    "version": "1.2.0",
+    "description": "PG-Client wrapper for making NOTIFY/LISTEN/UNLISTEN queries. Exposed as async functions or as EventEmitter (continuation of pg-ipc).",
     "types": "./dist/IPC.d.ts",
     "main": "./dist/IPC.js",
     "files": [
@@ -12,20 +12,28 @@
     "keywords": [
         "pg",
         "postgres",
+        "ipc",
         "notifications",
-        "ipc"
+        "pg-ipc"
     ],
     "license": "MIT",
     "author": "WhatCats",
-    "repository": "https://github.com/WhatCats/postgres-ipc",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/WhatCats/postgres-ipc.git"
+    },
     "bugs": "https://github.com/WhatCats/postgres-ipc/issues",
-    "homepage": "https://github.com/WhatCats/postgres-ipc",
+    "homepage": "https://github.com/WhatCats/postgres-ipc#readme",
     "dependencies": {
         "pg": "^8.10.0"
     },
     "devDependencies": {
         "@types/node": "^18.15.13",
         "@types/pg": "^8.6.6",
+        "@typescript-eslint/eslint-plugin": "^5.59.1",
+        "@typescript-eslint/parser": "^5.59.1",
+        "eslint": "^8.39.0",
+        "prettier": "^2.8.8",
         "typescript": "^5.0.4"
     }
 }

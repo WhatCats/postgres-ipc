@@ -24,19 +24,24 @@ class PostgresIPCClient extends EventEmitter {
 
         const dispatch = (channel: string | symbol): channel is string => {
             return (
-                this.status === "connected" &&
-                typeof channel === "string" &&
-                !RESERVED_CHANNELS.includes(channel)
+                this.status === "connected" && typeof channel === "string" && !RESERVED_CHANNELS.includes(channel)
             )
         }
 
-        this.on("newListener", (channel: string | symbol) => {
-            if (dispatch(channel) && !this._channels.has(channel)) this.listen(channel).catch(console.error)
-        })
+        const advancedDefaultErrorHandler = (err: Error) => console.error(err)
+        this.on("error", advancedDefaultErrorHandler)
 
         this.on("removeListener", (channel: string | symbol) => {
             if (dispatch(channel) && this.listenerCount(channel) === 0 && this._channels.has(channel))
                 this.unlisten(channel).catch(console.error)
+            if (channel === "error" && this.listenerCount(channel) === 0)
+                this.on("error", advancedDefaultErrorHandler)
+        })
+
+        this.on("newListener", (channel: string | symbol, listener: Function) => {
+            if (dispatch(channel) && !this._channels.has(channel)) this.listen(channel).catch(console.error)
+            if (channel === "error" && listener !== advancedDefaultErrorHandler)
+                this.off("error", advancedDefaultErrorHandler)
         })
     }
 
@@ -48,11 +53,12 @@ class PostgresIPCClient extends EventEmitter {
         return this._client
     }
 
+    /** Use this to check if a notification came from this client. */
     get processId() {
         return ((this.client as any)?.processID ?? null) as number | null
     }
 
-    /** All PG channels you are currently listening for */
+    /** This returns all PG channels you are currently listening for. */
     channels() {
         return this.eventNames()
             .concat(...this._channels)
@@ -83,9 +89,30 @@ class PostgresIPCClient extends EventEmitter {
         }
     }
 
+    emit<K extends keyof ThisEvents>(event: K, ...args: ThisEvents[K]): boolean
     /**
+     * **Makes a NOTIFY query without awaiting the result with .catch(console.error)**
      * @param payload non-string data will be auto encoded to JSON -
-     * In the default configuration it must be shorter than 8000 bytes.
+     * In the default PG configuration it must be shorter than 8000 bytes.
+     * (If binary data or large amounts of information need to be communicated, it's best to put it in a database table and send the key of the record.)
+     * @returns if you are also listening to the channel you sent data to
+     */
+    emit(channel: string, payload: any): boolean
+    emit(channel: string, ...args: any[]): boolean {
+        if (RESERVED_CHANNELS.includes(channel)) return super.emit(channel, ...args)
+        this.notify(channel, args[0] ?? null).catch(console.error)
+        return this.channels().includes(channel)
+    }
+
+    /** @deprecated Use notify or emit instead. */
+    async send(channel: string, payload: any = null) {
+        return this.notify(channel, payload)
+    }
+
+    /**
+     * **Makes a NOTIFY query with .catch(console.error)** and will also return the error if there is one.
+     * @param payload non-string data will be auto encoded to JSON -
+     * In the default PG configuration it must be shorter than 8000 bytes.
      * (If binary data or large amounts of information need to be communicated, it's best to put it in a database table and send the key of the record.)
      * @returns error if there was one after calling console.error
      */
@@ -104,10 +131,13 @@ class PostgresIPCClient extends EventEmitter {
         if (res instanceof Error) return res
     }
 
+    /**
+     * **Makes a LISTEN query.**
+     */
     async listen(channelOrChannels: string | string[]) {
-        const channels = (
-            typeof channelOrChannels === "string" ? [channelOrChannels] : channelOrChannels
-        ).filter((channel) => !RESERVED_CHANNELS.includes(channel))
+        const channels = (typeof channelOrChannels === "string" ? [channelOrChannels] : channelOrChannels).filter(
+            (channel) => !RESERVED_CHANNELS.includes(channel)
+        )
         const query = channels.map((channel) => `LISTEN ${this.client.escapeIdentifier(channel)}`)
         if (query.length > 0) {
             await this.query(query.join(";"))
@@ -117,7 +147,7 @@ class PostgresIPCClient extends EventEmitter {
     }
 
     /**
-     * This will also remove any listeners added for `channelOrChannels`
+     * **Makes a UNLISTEN query and removes EventEmitter listeners on success.**
      * @param channelOrChannels leave undefined to unlisten from all channels
      */
     async unlisten(channelOrChannels?: string | string[]) {
@@ -141,6 +171,7 @@ class PostgresIPCClient extends EventEmitter {
         }
     }
 
+    /** **Makes a query with the PG-Client used for the ipc-connection.** */
     async query(query: string, params?: any[]) {
         if (this.status === "dead" || this.status === "reconnecting")
             throw Error(`PG-IPC-Client has encountered a connection error and is currently not queryable.`)
@@ -189,26 +220,20 @@ class PostgresIPCClient extends EventEmitter {
         }
     }
 
-    emit(event: string, notification: PGNotification): boolean
-    emit<K extends keyof ThisEvents>(event: K, ...args: ThisEvents[K]): boolean
-    emit(event: string, ...args: any[]): boolean {
-        return super.emit(event, ...args)
-    }
-
-    on(event: string, listener: (notification: PGNotification) => unknown): this
     on<K extends keyof ThisEvents>(event: K, listener: (...args: ThisEvents[K]) => unknown): this
+    on(event: string, listener: (notification: PGNotification) => unknown): this
     on(event: string, listener: (...args: any[]) => unknown): this {
         return super.on(event, listener)
     }
 
-    once(event: string, listener: (notification: PGNotification) => unknown): this
     once<K extends keyof ThisEvents>(event: K, listener: (...args: ThisEvents[K]) => unknown): this
+    once(event: string, listener: (notification: PGNotification) => unknown): this
     once(event: string, listener: (...args: any[]) => unknown) {
         return super.once(event, listener)
     }
 
-    off(event: string, listener: (notification: PGNotification) => unknown): this
     off<K extends keyof ThisEvents>(event: K, listener: (...args: ThisEvents[K]) => unknown): this
+    off(event: string, listener: (notification: PGNotification) => unknown): this
     off(event: string, listener: (...args: any[]) => unknown) {
         return super.off(event, listener)
     }
@@ -221,8 +246,8 @@ interface PGNotification extends Notification {
 }
 
 interface ThisEvents {
-    newListener: [channel: string]
-    removeListener: [channel: string]
+    newListener: [channel: string, listener: Function]
+    removeListener: [channel: string, listener: Function]
     notification: [notification: PGNotification]
     notify: [channel: string, payload: any]
     debug: [message: string]
