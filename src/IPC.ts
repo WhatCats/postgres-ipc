@@ -22,26 +22,38 @@ class PostgresIPCClient extends EventEmitter {
         this.config = config
         this.createClient()
 
-        const dispatch = (channel: string | symbol): channel is string => {
+        const dispatch = (channel: string) => {
             return (
-                this.status === "connected" && typeof channel === "string" && !RESERVED_CHANNELS.includes(channel)
+                this.status === "connected" && !RESERVED_CHANNELS.includes(channel) && this.channelIsValid(channel)
             )
+        }
+
+        const invalidChannelName = (channel: string) => {
+            return !RESERVED_CHANNELS.includes(channel) && !this.channelIsValid(channel)
         }
 
         const advancedDefaultErrorHandler = (err: Error) => console.error(err)
         this.on("error", advancedDefaultErrorHandler)
 
-        this.on("removeListener", (channel: string | symbol) => {
-            if (dispatch(channel) && this.listenerCount(channel) === 0 && this._channels.has(channel))
-                this.unlisten(channel).catch(console.error)
-            if (channel === "error" && this.listenerCount(channel) === 0)
-                this.on("error", advancedDefaultErrorHandler)
+        this.on("removeListener", (channel) => {
+            if (typeof channel === "string") {
+                if (dispatch(channel) && this.listenerCount(channel) === 0 && this._channels.has(channel))
+                    this.unlisten(channel).catch(console.error)
+                if (channel === "error" && this.listenerCount(channel) === 0)
+                    this.on("error", advancedDefaultErrorHandler)
+            }
         })
 
-        this.on("newListener", (channel: string | symbol, listener: Function) => {
-            if (dispatch(channel) && !this._channels.has(channel)) this.listen(channel).catch(console.error)
-            if (channel === "error" && listener !== advancedDefaultErrorHandler)
-                this.off("error", advancedDefaultErrorHandler)
+        this.on("newListener", (channel, listener) => {
+            if (typeof channel === "string") {
+                if (invalidChannelName(channel))
+                    return console.warn(
+                        `PG-IPC: Listener for channel '${channel}' will be ignored since PG identifiers, are limited to 63 characters.`
+                    )
+                if (dispatch(channel) && !this._channels.has(channel)) this.listen(channel).catch(console.error)
+                if (channel === "error" && listener !== advancedDefaultErrorHandler)
+                    this.off("error", advancedDefaultErrorHandler)
+            }
         })
     }
 
@@ -58,11 +70,22 @@ class PostgresIPCClient extends EventEmitter {
         return ((this.client as any)?.processID ?? null) as number | null
     }
 
+    channelIsValid(channel: string) {
+        return channel.length <= 63
+    }
+
     /** This returns all PG channels you are currently listening for. */
     channels() {
-        return this.eventNames()
-            .concat(...this._channels)
-            .filter((v) => typeof v === "string" && !RESERVED_CHANNELS.includes(v)) as string[]
+        return Array.from(
+            new Set(
+                this.eventNames()
+                    .filter(
+                        (v): v is string =>
+                            typeof v === "string" && !RESERVED_CHANNELS.includes(v) && this.channelIsValid(v)
+                    )
+                    .concat(...this._channels)
+            )
+        )
     }
 
     async connect() {
@@ -89,6 +112,7 @@ class PostgresIPCClient extends EventEmitter {
         }
     }
 
+    /** If you are trying to send a PG notification use notify instead. */
     emit<K extends keyof ThisEvents>(event: K, ...args: ThisEvents[K]): boolean
     /**
      * **Makes a NOTIFY query without awaiting the result with .catch(console.error)**
@@ -117,6 +141,10 @@ class PostgresIPCClient extends EventEmitter {
      * @returns error if there was one after calling console.error
      */
     async notify(channel: string, payload: any = null) {
+        if (!this.channelIsValid(channel))
+            return console.warn(
+                `PG-IPC: Notify on channel '${channel}' was ignored since PG identifiers, are limited to 63 characters.`
+            )
         const encoded = (
             typeof payload === "string" || payload === null ? payload : JSON.stringify(payload)
         ) as string
@@ -134,10 +162,12 @@ class PostgresIPCClient extends EventEmitter {
     /**
      * **Makes a LISTEN query.**
      */
-    async listen(channelOrChannels: string | string[]) {
-        const channels = (typeof channelOrChannels === "string" ? [channelOrChannels] : channelOrChannels).filter(
-            (channel) => !RESERVED_CHANNELS.includes(channel)
-        )
+    async listen(...channelOrChannels: string[] | [string[]]) {
+        const channels = (
+            Array.isArray(channelOrChannels[0]) ? channelOrChannels[0] : channelOrChannels
+        ) as string[]
+        if (channels.some((channel) => !this.channelIsValid(channel)))
+            throw new TypeError("Channel names, like all PG identifiers, are limited to 63 characters.")
         const query = channels.map((channel) => `LISTEN ${this.client.escapeIdentifier(channel)}`)
         if (query.length > 0) {
             await this.query(query.join(";"))
@@ -150,23 +180,28 @@ class PostgresIPCClient extends EventEmitter {
      * **Makes a UNLISTEN query and removes EventEmitter listeners on success.**
      * @param channelOrChannels leave undefined to unlisten from all channels
      */
-    async unlisten(channelOrChannels?: string | string[]) {
-        const channels = typeof channelOrChannels === "string" ? [channelOrChannels] : channelOrChannels
-        if (channels === undefined) {
+    async unlisten(...channelOrChannels: string[] | [string[]]) {
+        const channels = (
+            Array.isArray(channelOrChannels[0]) ? channelOrChannels[0] : channelOrChannels
+        ) as string[]
+        if (channels.length === 0) {
             await this.query("UNLISTEN *")
-            this._channels.forEach((channel) => {
+            this.channels().forEach((channel) => {
                 this._channels.delete(channel)
                 this.removeAllListeners(channel)
             })
+            this._channels.clear()
             this.emit("debug", `PG-IPC ran unlisten for all channels`)
         } else {
-            const remove = channels.filter((channel) => !RESERVED_CHANNELS.includes(channel))
-            const query = remove.map((channel) => `UNLISTEN ${this.client.escapeIdentifier(channel)}`)
+            if (channels.some((channel) => !this.channelIsValid(channel)))
+                throw new TypeError("Channel names, like all PG identifiers, are limited to 63 characters.")
+            const listenable = channels.filter((channel) => !RESERVED_CHANNELS.includes(channel))
+            const query = channels.map((channel) => `UNLISTEN ${this.client.escapeIdentifier(channel)}`)
             if (query.length > 0) {
                 await this.query(query.join(";"))
-                remove.forEach((channel) => this._channels.delete(channel))
-                channels.forEach((channel) => this.removeAllListeners(channel))
-                this.emit("debug", `PG-IPC ran unlisten for channels [${remove.join(", ")}]`)
+                channels.forEach((channel) => this._channels.delete(channel))
+                listenable.forEach((channel) => this.removeAllListeners(channel))
+                this.emit("debug", `PG-IPC ran unlisten for channels [${channels.join(", ")}]`)
             }
         }
     }
@@ -196,7 +231,7 @@ class PostgresIPCClient extends EventEmitter {
         if (this.status === "dead") {
             this._status = "reconnecting"
             this.emit("debug", `PG-IPC attempting reconnect after 5 seconds...`)
-            await sleep(5)
+            await sleep(6.6)
             this.createClient()
             await this.connect().catch((err) => this.reconnectError(err))
         }
@@ -216,10 +251,11 @@ class PostgresIPCClient extends EventEmitter {
             /** Payload is not JSON content but thats OK */
         } finally {
             this.emit("notification", msg as PGNotification)
-            this.emit(msg.channel, msg as PGNotification)
+            if (!RESERVED_CHANNELS.includes(msg.channel)) this.emit(msg.channel, msg as PGNotification)
         }
     }
 
+    /** If you want to listen to a channel with this name you will have to use the notification event. */
     on<K extends keyof ThisEvents>(event: K, listener: (...args: ThisEvents[K]) => unknown): this
     on(event: string, listener: (notification: PGNotification) => unknown): this
     on(event: string, listener: (...args: any[]) => unknown): this {
@@ -246,8 +282,8 @@ interface PGNotification extends Notification {
 }
 
 interface ThisEvents {
-    newListener: [channel: string, listener: Function]
-    removeListener: [channel: string, listener: Function]
+    newListener: [channel: string | symbol, listener: Function]
+    removeListener: [channel: string | symbol, listener: Function]
     notification: [notification: PGNotification]
     notify: [channel: string, payload: any]
     debug: [message: string]

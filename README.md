@@ -1,5 +1,5 @@
 # postgres-ipc
-PG-Client wrapper for making NOTIFY/LISTEN/UNLISTEN queries. Exposed as async functions or as an EventEmitter (continuation of `pg-ipc`).
+PG-Client wrapper for making NOTIFY/LISTEN/UNLISTEN queries. Exposed as async functions and as an EventEmitter (continuation of `pg-ipc`).
 > See more about Postgres notifications here: https://www.postgresql.org/docs/15/libpq-notify.html
 
 ## Features
@@ -52,15 +52,24 @@ import PostgresIPCClient from 'postgres-ipc'
 
 const ipc = new PostgresIPCClient()
 ipc.connect().then(async () => {
-    await ipc.listen("channel")
-    await ipc.listen(["channel1", "channel2"])
+    // Otherwise blocked channels like error and debug can be listened for like this
+    await ipc.listen("channel1", "error")
+    await ipc.listen(["channel2", "debug", "end"])
+
+    // and captured like this
+    ipc.on("notification", (notification) => {
+        if (notification.channel === "error") console.log("Notification on error channel!", notification.payload)
+    })
     
-    await ipc.unlisten("channel")
-    await ipc.unlisten(["channel1", "channel2"])
+    await ipc.unlisten("channel2", "debug", "end")
+    await ipc.unlisten(["channel1", "error"])
     await ipc.unlisten() // (Unlisten to all)
     console.log(ipc.channels()) // These are the channels you are currently listening for.
 
-    await ipc.notify("IMPORTANT", "Remember this won't throw an error, it will return an error that has already been logged.")
+    await ipc.notify(
+        "IMPORTANT",
+        "Remember this won't throw an error, it will return an error that has already been logged."
+    )
     await ipc.destroy()
 })
 ```
@@ -70,7 +79,7 @@ ipc.connect().then(async () => {
 ipc.on('notification', (notification) => console.log("Notification from any channel!", notification))
 ipc.on('notify', (channel, payload) => console.log("A PG NOTIFY query was successfully made!", channel, payload))
 ipc.on('debug', (message) => console.log("See exactly what's happening:", message))
-// console.error is already added as a default error handler. Your own listener will overwrite it though.
+// console.error is already added as a default error handler. You can overwrite it though by adding your own listener:
 ipc.on('error', (err) => console.log("One of your listeners threw an error:", err))
 ipc.on('end', () => console.log("I was once connected but I got destroyed :("))
 ```
